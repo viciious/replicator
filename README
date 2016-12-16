@@ -1,3 +1,3 @@
-MySql binlog to Tarantool replication daemon
+MySql binlog to Tarantool 1.5replication daemon
 
 Please refer to https://github.com/viciious/replicator/wiki for more information.
