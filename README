@@ -1,0 +1,3 @@
+MySql binlog to Tarantool replication daemon
+
+Please refer to https://github.com/viciious/replicator/wiki for more information.
