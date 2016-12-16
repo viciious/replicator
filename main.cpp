@@ -261,8 +261,10 @@ static void tpwrite_main(void *arg)
 static unsigned seconds_behind_master;
 static unsigned max_seconds_behind_master;
 
+#ifdef ZMQ_ENABLE_RB
 static unsigned zalloc_count;
 static unsigned max_zalloc_count;
+#endif
 
 static void ping_watchdog()
 {
@@ -286,8 +288,10 @@ static void update_stats()
 	seconds_behind_master = dbreader->GetSecondsBehindMaster();
 	if (seconds_behind_master > max_seconds_behind_master) max_seconds_behind_master = seconds_behind_master; 
 
+#ifdef ZMQ_ENABLE_RB
 	zalloc_count = zmq_get_alloc_count();
 	if (zalloc_count > max_zalloc_count) max_zalloc_count = zalloc_count;
+#endif
 
 	if (graphite) {
 		if (now > graphite->GetLastPacketTime() + graphite->GetInterval()) {
@@ -295,9 +299,11 @@ static void update_stats()
 			graphite->SendStat("max_seconds_behind_master", max_seconds_behind_master);
 			max_seconds_behind_master = seconds_behind_master;
 
+#ifdef ZMQ_ENABLE_RB
 			graphite->SendStat("zmq_allocs_total", zalloc_count);
 			graphite->SendStat("zmq_allocs_total_max", max_zalloc_count);
 			max_zalloc_count = zalloc_count;
+#endif
 		}
 	}
 }
