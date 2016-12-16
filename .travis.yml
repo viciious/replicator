@@ -1,0 +1,28 @@
+dist: trusty
+sudo: false
+install: true
+notifications:
+  email: false
+
+matrix:
+  include:
+    - os: linux
+      language: c++
+      compiler: gcc-4.9
+      addons:
+        apt:
+          sources:
+            - kubuntu-backports
+            - ubuntu-toolchain-r-test
+          packages:
+            - gcc-4.9
+            - g++-4.9
+            - cmake
+            - build-essential
+            - libboost-all-dev
+            - libmysqlclient-dev
+            - libzmq3-dev
+
+script:
+  - cmake .
+  - make

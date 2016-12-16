@@ -31,8 +31,8 @@ include_directories("${REPLICATOR_ROOT}" "${REPLICATOR_ROOT}/lib/libslave" "${RE
 find_library(LMYSQL_CLIENT_R mysqlclient_r PATH_SUFFIXES mysql)
 find_library(LPTHREAD pthread)
 find_library(LZMQ zmq)
-find_library(LBOOST_SYSTEM_MT boost_system-mt)
-find_library(LBOOST_SERIALIZATION_MT boost_serialization-mt)
+find_library(LBOOST_SYSTEM_MT boost_system)
+find_library(LBOOST_SERIALIZATION_MT boost_serialization)
 
 add_executable(rp ${REPLICATOR_SRC})
 set_target_properties(rp PROPERTIES COMPILE_FLAGS "${REPLICATOR_CFLAGS}")
