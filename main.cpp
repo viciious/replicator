@@ -210,7 +210,7 @@ static void tpwrite_run(void *ZMQTpSocket)
 					}
 					int code = tpwriter->GetReplyCode();
 					if (code) {
-						std::cerr << "Tarantool eror: " << tpwriter->GetReplyErrorMessage() << " (code: " << code << ")" << std::endl;
+						std::cerr << "Tarantool error: " << tpwriter->GetReplyErrorMessage() << " (code: " << code << ")" << std::endl;
 						connected = !tpwriter->DisconnectOnError();
 					}
 				}
