@@ -3,8 +3,6 @@
 #include <sstream>
 #include <fstream>
 #include <signal.h>
-#include <lib/tp.1.5.h>
-#include <lib/session.h>
 
 #include <boost/bind.hpp>
 #include <boost/archive/binary_oarchive.hpp>
@@ -16,7 +14,7 @@
 #include <libconfig.h++>
 
 #include "dbreader.h"
-#include "tpwriter.h"
+#include "tpwfactory.h"
 #include "serializable.h"
 #include "logger.h"
 #include "remotemon.h"
@@ -405,20 +403,17 @@ static void init(libconfig::Config &cfg)
 		{
 			const libconfig::Setting &tarantool = root["tarantool"];
 
-			std::string user(""), password("");
 			unsigned port = 33013;
 			unsigned connect_retry = 15;
 			unsigned sync_retry = 1000;
 			bool disconnect_on_error = false;
-			tarantool.lookupValue("user", user);
-			tarantool.lookupValue("password", password);
 			tarantool.lookupValue("port", port);
 			tarantool.lookupValue("connect_retry", connect_retry);
 			tarantool.lookupValue("sync_retry", sync_retry);
 			tarantool.lookupValue("disconnect_on_error", disconnect_on_error);
 
-			tpwriter = new TPWriter((const char *)tarantool["host"], user, password, (unsigned)tarantool["binlog_pos_space"],
-				(unsigned)tarantool["binlog_pos_key"], port, connect_retry, sync_retry, disconnect_on_error);
+			tpwriter = TPWFactory::NewTPWriter(15, (const char *)tarantool["host"], port, (unsigned)tarantool["binlog_pos_space"],
+				(unsigned)tarantool["binlog_pos_key"], connect_retry, sync_retry, disconnect_on_error);
 		}
 
 		// read Mysql to Tarantool mappings (each table maps to a single Tarantool space)
@@ -430,9 +425,9 @@ static void init(libconfig::Config &cfg)
 				const libconfig::Setting &mapping = mappings[i];
 				const std::string database((const char *)mapping["database"]);
 				const std::string table((const char *)mapping["table"]);
-				std::string insert_call = TPWriter::empty_call;
-				std::string update_call = TPWriter::empty_call;
-				std::string delete_call = TPWriter::empty_call;
+				std::string insert_call = "";
+				std::string update_call = "";
+				std::string delete_call = "";
 				unsigned space((unsigned)mapping["space"]);
 				std::vector<std::string> columns;
 				TPWriter::Tuple tuple, keys;

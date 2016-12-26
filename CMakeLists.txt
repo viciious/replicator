@@ -11,7 +11,8 @@ set(REPLICATOR_SRC
     ${REPLICATOR_ROOT}/lib/tarantool-c/lib/session.c
     ${REPLICATOR_ROOT}/dbreader.cpp
     ${REPLICATOR_ROOT}/main.cpp
-    ${REPLICATOR_ROOT}/tpwriter.cpp
+    ${REPLICATOR_ROOT}/tpwriter15.cpp
+    ${REPLICATOR_ROOT}/tpwfactory.cpp
 )
 
 add_subdirectory(lib/tarantool-c)

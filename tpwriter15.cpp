@@ -13,19 +13,17 @@
 
 #include <sys/time.h>
 
-#include "tpwriter.h"
+#include "tpwriter15.h"
 #include "serializable.h"
 
 namespace replicator {
 
-const std::string TPWriter::empty_call("");
-
-TPWriter::TPWriter(const std::string &host, const std::string &user, const std::string &password, 
-	uint32_t binlog_key_space, uint32_t binlog_key, unsigned int port, unsigned connect_retry, unsigned sync_retry,
+TPWriter15::TPWriter15(const std::string &host, unsigned int port,
+	uint32_t binlog_key_space, uint32_t binlog_key, unsigned connect_retry, unsigned sync_retry,
 	bool disconnect_on_error) :
-host(host), user(user), password(password), binlog_key_space(binlog_key_space), binlog_key(binlog_key),
+host(host), port(port), binlog_key_space(binlog_key_space), binlog_key(binlog_key),
 binlog_name(""), binlog_pos(0), seconds_behind_master(0), last_unix_timestamp(0),
-port(port), connect_retry(connect_retry), sync_retry(sync_retry),
+connect_retry(connect_retry), sync_retry(sync_retry),
 next_connect_attempt(0), next_sync_attempt(0), next_ping_attempt(0),
 last_synced_binlog_name(""), last_synced_binlog_pos(0), disconnect_on_error(disconnect_on_error),
 reply_bytes(0), reply_server_code(0), reply_error_msg("")
@@ -33,7 +31,7 @@ reply_bytes(0), reply_server_code(0), reply_error_msg("")
 
 }
 
-bool TPWriter::Connect()
+bool TPWriter15::Connect()
 {
 	// connect to tarantool
 	if (::time(NULL) < next_connect_attempt) {
@@ -45,7 +43,7 @@ bool TPWriter::Connect()
 	::tb_sesinit(s);
 	::tb_sesset(s, TB_HOST, host.c_str());
 	::tb_sesset(s, TB_PORT, port);
-	::tb_sesset(s, TB_SENDBUF, TPWriter::SND_BUFSIZE);
+	::tb_sesset(s, TB_SENDBUF, TPWriter15::SND_BUFSIZE);
 	::tb_sesset(s, TB_READBUF, 0);
 	::tb_sesset(s, TB_RECVTM, 10);
 	::tb_sesset(s, TB_SENDTM, 10000);
@@ -66,12 +64,12 @@ bool TPWriter::Connect()
 	return true;
 }
 
-TPWriter::~TPWriter()
+TPWriter15::~TPWriter15()
 {
 	::tb_sesfree(&sess);
 }
 
-bool TPWriter::ReadBinlogPos(std::string &binlog_name, unsigned long &binlog_pos)
+bool TPWriter15::ReadBinlogPos(std::string &binlog_name, unsigned long &binlog_pos)
 {
 	::tbses *s = &sess;
 
@@ -101,7 +99,7 @@ bool TPWriter::ReadBinlogPos(std::string &binlog_name, unsigned long &binlog_pos
 		return false;
 	}
 
-	next_ping_attempt = Milliseconds() + TPWriter::PING_TIMEOUT;
+	next_ping_attempt = Milliseconds() + TPWriter15::PING_TIMEOUT;
 
 	// send initial binlog position to the main thread
 	SerializableBinlogEvent ev;
@@ -142,12 +140,12 @@ bool TPWriter::ReadBinlogPos(std::string &binlog_name, unsigned long &binlog_pos
 	return true;
 }
 
-void TPWriter::Disconnect()
+void TPWriter15::Disconnect()
 {
 	::tb_sesfree(&sess);
 }
 
-void TPWriter::Ping()
+void TPWriter15::Ping()
 {
 	char buf[100];
 	::tp req;
@@ -156,7 +154,7 @@ void TPWriter::Ping()
 	Send(buf, ::tp_used(&req));
 }
 
-void TPWriter::AddTable(const std::string &db, const std::string &table, unsigned space, const Tuple &tuple, const Tuple &keys,
+void TPWriter15::AddTable(const std::string &db, const std::string &table, unsigned space, const Tuple &tuple, const Tuple &keys,
 	const std::string &insert_call, const std::string &update_call, const std::string &delete_call)
 {
 	TableMap &d = dbs[db];
@@ -169,7 +167,7 @@ void TPWriter::AddTable(const std::string &db, const std::string &table, unsigne
 	s.delete_call = delete_call;
 }
 
-void TPWriter::SaveBinlogPos()
+void TPWriter15::SaveBinlogPos()
 {
 	char buf[1024];
 	std::ostringstream oss1, oss2, oss3;
@@ -203,9 +201,9 @@ void TPWriter::SaveBinlogPos()
 	last_synced_binlog_pos = binlog_pos;
 }
 
-bool TPWriter::BinlogEventCallback(const SerializableBinlogEvent &ev)
+bool TPWriter15::BinlogEventCallback(const SerializableBinlogEvent &ev)
 {
-	char buf[TPWriter::SND_BUFSIZE];
+	char buf[TPWriter15::SND_BUFSIZE];
 	::tp req;
 
 	// spacial case event "IGNORE", which only updates binlog position
@@ -314,7 +312,7 @@ bool TPWriter::BinlogEventCallback(const SerializableBinlogEvent &ev)
 }
 
 // blocking send
-ssize_t TPWriter::Send(void *buf, ssize_t bytes)
+ssize_t TPWriter15::Send(void *buf, ssize_t bytes)
 {
 	int64_t r;
 	ssize_t total = 0;
@@ -333,7 +331,7 @@ ssize_t TPWriter::Send(void *buf, ssize_t bytes)
 }
 
 // non-blocking receive
-ssize_t TPWriter::Recv(void *buf, ssize_t bytes)
+ssize_t TPWriter15::Recv(void *buf, ssize_t bytes)
 {
 	int64_t r = ::tb_sesrecv(&sess, static_cast<char *>(buf), bytes, 0);
 	if (r == -1 && (sess.errno_ == EWOULDBLOCK || sess.errno_ == EAGAIN)) {
@@ -346,13 +344,13 @@ ssize_t TPWriter::Recv(void *buf, ssize_t bytes)
 	return r;
 }
 
-bool TPWriter::Sync(bool force)
+bool TPWriter15::Sync(bool force)
 {
 	int64_t r = 0;
 
 	if (next_ping_attempt == 0 || Milliseconds() > next_ping_attempt) {
 		force = true;
-		next_ping_attempt = Milliseconds() + TPWriter::PING_TIMEOUT;
+		next_ping_attempt = Milliseconds() + TPWriter15::PING_TIMEOUT;
 		Ping();
 	}
 
@@ -371,7 +369,7 @@ bool TPWriter::Sync(bool force)
 	return r != -1;
 }
 
-int TPWriter::ReadReply(void)
+int TPWriter15::ReadReply(void)
 {
 	ssize_t len = ::tp_reqbuf(reply_buf, reply_bytes);
 	if (len > 0) {
@@ -410,17 +408,17 @@ int TPWriter::ReadReply(void)
 	return 0;
 }
 
-int TPWriter::GetReplyCode() const
+int TPWriter15::GetReplyCode() const
 {
 	return reply_server_code;
 }
 
-const char *TPWriter::GetReplyErrorMessage() const
+const char *TPWriter15::GetReplyErrorMessage() const
 {
 	return reply_error_msg;
 }
 
-uint64_t TPWriter::Milliseconds()
+uint64_t TPWriter15::Milliseconds()
 {
 	struct timeval tp;
 	::gettimeofday( &tp, NULL );
