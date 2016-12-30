@@ -4,6 +4,7 @@
 #include <string>
 #include <map>
 #include <vector>
+#include <sys/time.h>
 #include "serializable.h"
 
 namespace replicator {
@@ -30,7 +31,26 @@ public:
 	typedef std::vector<unsigned> Tuple;
 
 	virtual void AddTable(const std::string &db, const std::string &table, unsigned space, const Tuple &tuple, const Tuple &keys,
-		const std::string &insert_call = "", const std::string &update_call = "", const std::string &delete_call = "") = 0;
+		const std::string &insert_call = "", const std::string &update_call = "", const std::string &delete_call = "") {
+		TableMap &d = dbs[db];
+		TableSpace &s = d[table];
+		s.space = space;
+		s.tuple = tuple;
+		s.keys = keys;
+		s.insert_call = insert_call;
+		s.update_call = update_call;
+		s.delete_call = delete_call;
+	}
+
+	virtual uint64_t Milliseconds() {
+		struct timeval tp;
+		::gettimeofday( &tp, NULL );
+		if (!secbase) {
+			secbase = tp.tv_sec;
+			return tp.tv_usec / 1000;
+		}
+		return (uint64_t)(tp.tv_sec - secbase)*1000 + tp.tv_usec / 1000;
+	}
 
 protected:
 	class TableSpace
@@ -44,6 +64,12 @@ protected:
 		std::string update_call;
 		std::string delete_call;
 	};
+
+	uint64_t secbase;
+
+	typedef std::map<std::string, TableSpace> TableMap;
+	typedef std::map<std::string, TableMap> DBMap;
+	DBMap dbs;
 };
 
 }

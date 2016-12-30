@@ -407,12 +407,20 @@ static void init(libconfig::Config &cfg)
 			unsigned connect_retry = 15;
 			unsigned sync_retry = 1000;
 			bool disconnect_on_error = false;
+			std::string dsn = "";
+			int version = 15;
 			tarantool.lookupValue("port", port);
 			tarantool.lookupValue("connect_retry", connect_retry);
 			tarantool.lookupValue("sync_retry", sync_retry);
 			tarantool.lookupValue("disconnect_on_error", disconnect_on_error);
 
-			tpwriter = TPWFactory::NewTPWriter(15, (const char *)tarantool["host"], port, (unsigned)tarantool["binlog_pos_space"],
+			if (tarantool.lookupValue("dsn", dsn)) {
+				version = 16;
+			}
+			else {
+				dsn = (const char *)tarantool["host"];
+			}
+			tpwriter = TPWFactory::NewTPWriter(version, dsn, port, (unsigned)tarantool["binlog_pos_space"],
 				(unsigned)tarantool["binlog_pos_key"], connect_retry, sync_retry, disconnect_on_error);
 		}
 
@@ -533,7 +541,7 @@ static void main_loop()
 {
 	std::string TpBinlogName;
 	unsigned long TpBinlogPos;
-	bool disconnected;
+	bool disconnected = true;
 
 	// read initial binlog pos from Tarantool
 	while (!is_term) {

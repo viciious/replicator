@@ -13,4 +13,4 @@ public:
 
 }
 
-#endif
+#endif // REPLICATOR_TPWFACTORY_H

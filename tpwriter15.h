@@ -7,7 +7,6 @@
 #include <lib/tp.1.5.h>
 #include <lib/session.h>
 #include "tpwriter.h"
-#include "serializable.h"
 
 namespace replicator {
 
@@ -29,9 +28,6 @@ public:
 	int GetReplyCode() const;
 	const char *GetReplyErrorMessage() const;
 	bool DisconnectOnError() const { return disconnect_on_error; }
-
-	void AddTable(const std::string &db, const std::string &table, unsigned space, const Tuple &tuple, const Tuple &keys,
-		const std::string &insert_call = "", const std::string &update_call = "", const std::string &delete_call = "");
 
 private:
 	static const unsigned int BINLOG_POS_KEY = 1;
@@ -66,8 +62,6 @@ private:
 
 	void SaveBinlogPos();
 
-	uint64_t Milliseconds();
-
 	char reply_buf[RCV_BUFSIZE];
 	char reply_copy[sizeof(reply_buf)];
 	size_t reply_bytes;
@@ -75,11 +69,6 @@ private:
 	int reply_server_code;
 	const char *reply_error_msg;
 	uint64_t secbase;
-
-	typedef std::map<std::string, TableSpace> TableMap;
-	typedef std::map<std::string, TableMap> DBMap;
-	DBMap dbs;
-
 };
 
 }

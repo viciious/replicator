@@ -5,16 +5,11 @@
 #include <boost/function.hpp>
 #include <boost/archive/binary_oarchive.hpp>
 #include <boost/archive/text_oarchive.hpp>
-#include <lib/tp.1.5.h>
-#include <lib/session.h>
 
 #include <zmq.h>
 #include <zmq_utils.h>
 
-#include <sys/time.h>
-
 #include "tpwriter15.h"
-#include "serializable.h"
 
 namespace replicator {
 
@@ -38,6 +33,8 @@ bool TPWriter15::Connect()
 		::sleep(1);
 		return false;
 	}
+
+	std::cout << "Connecting to Tarantool 1.5" << std::endl;
 
 	::tbses *s = &sess;
 	::tb_sesinit(s);
@@ -154,19 +151,6 @@ void TPWriter15::Ping()
 	Send(buf, ::tp_used(&req));
 }
 
-void TPWriter15::AddTable(const std::string &db, const std::string &table, unsigned space, const Tuple &tuple, const Tuple &keys,
-	const std::string &insert_call, const std::string &update_call, const std::string &delete_call)
-{
-	TableMap &d = dbs[db];
-	TableSpace &s = d[table];
-	s.space = space;
-	s.tuple = tuple;
-	s.keys = keys;
-	s.insert_call = insert_call;
-	s.update_call = update_call;
-	s.delete_call = delete_call;
-}
-
 void TPWriter15::SaveBinlogPos()
 {
 	char buf[1024];
@@ -175,6 +159,7 @@ void TPWriter15::SaveBinlogPos()
 	if (last_synced_binlog_name == binlog_name && last_synced_binlog_pos == binlog_pos) {
 		return;
 	}
+
 	if (binlog_name == "") {
 		return;
 	}
@@ -416,17 +401,6 @@ int TPWriter15::GetReplyCode() const
 const char *TPWriter15::GetReplyErrorMessage() const
 {
 	return reply_error_msg;
-}
-
-uint64_t TPWriter15::Milliseconds()
-{
-	struct timeval tp;
-	::gettimeofday( &tp, NULL );
-	if (!secbase) {
-		secbase = tp.tv_sec;
-		return tp.tv_usec / 1000;
-	}
-	return (uint64_t)(tp.tv_sec - secbase)*1000 + tp.tv_usec / 1000;
 }
 
 }
