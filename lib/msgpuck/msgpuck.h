@@ -1,7 +1,7 @@
 #ifndef MSGPUCK_H_INCLUDED
 #define MSGPUCK_H_INCLUDED
 /*
- * Copyright (c) 2013 MsgPuck Authors
+ * Copyright (c) 2013-2016 MsgPuck Authors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or
@@ -106,6 +106,7 @@
 #include <string.h>
 #include <assert.h>
 #include <stdarg.h>
+#include <stdio.h>
 
 #if defined(__cplusplus)
 extern "C" {
@@ -115,7 +116,13 @@ extern "C" {
  * {{{ Platform-specific definitions
  */
 
-/** \cond 0 **/
+/** \cond false **/
+
+#if defined(__CC_ARM)         /* set the alignment to 1 for armcc compiler */
+#define MP_PACKED    __packed
+#else
+#define MP_PACKED  __attribute__((packed))
+#endif
 
 #if defined(__GNUC__) && !defined(__GNUC_STDC_INLINE__)
 #if !defined(MP_SOURCE)
@@ -167,7 +174,7 @@ mp_unreachable(void) { assert(0); abort(); }
 #define mp_unreachable() (assert(0))
 #endif
 
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define mp_identity(x) (x) /* just to simplify mp_load/mp_store macroses */
 
 #if MP_GCC_VERSION(4, 8) || __has_builtin(__builtin_bswap16)
 #define mp_bswap_u16(x) __builtin_bswap16(x)
@@ -201,11 +208,40 @@ mp_unreachable(void) { assert(0); abort(); }
 	(((x) >> 56) & UINT64_C(0x00000000000000ff)) )
 #endif
 
+#define MP_LOAD_STORE(name, type, bswap)					\
+MP_PROTO type									\
+mp_load_##name(const char **data);						\
+MP_IMPL type									\
+mp_load_##name(const char **data)						\
+{										\
+	struct MP_PACKED cast { type val; };					\
+	type val = bswap(((struct cast *) *data)->val);				\
+	*data += sizeof(type);							\
+	return val;								\
+}										\
+MP_PROTO char *									\
+mp_store_##name(char *data, type val);						\
+MP_IMPL char *									\
+mp_store_##name(char *data, type val)						\
+{										\
+	struct MP_PACKED cast { type val; };					\
+	((struct cast *) (data))->val = bswap(val);				\
+	return data + sizeof(type);						\
+}
+
+MP_LOAD_STORE(u8, uint8_t, mp_identity);
+
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+
+MP_LOAD_STORE(u16, uint16_t, mp_bswap_u16);
+MP_LOAD_STORE(u32, uint32_t, mp_bswap_u32);
+MP_LOAD_STORE(u64, uint64_t, mp_bswap_u64);
+
 #elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
 
-#define mp_bswap_u16(x) (x)
-#define mp_bswap_u32(x) (x)
-#define mp_bswap_u64(x) (x)
+MP_LOAD_STORE(u16, uint16_t, mp_identity);
+MP_LOAD_STORE(u32, uint32_t, mp_identity);
+MP_LOAD_STORE(u64, uint64_t, mp_identity);
 
 #else
 #error Unsupported __BYTE_ORDER__
@@ -216,41 +252,82 @@ mp_unreachable(void) { assert(0); abort(); }
 #endif /* defined(__FLOAT_WORD_ORDER__) */
 
 #if __FLOAT_WORD_ORDER__ == __ORDER_LITTLE_ENDIAN__
-MP_PROTO float
-mp_bswap_float(float f);
 
+/*
+ * Idiots from msgpack.org byte-swaps even IEEE754 float/double types.
+ * Some platforms (e.g. arm) cause SIGBUS on attempt to store
+ * invalid float in registers, so code like flt = mp_bswap_float(flt)
+ * can't be used here.
+ */
+
+union MP_PACKED mp_float_cast {
+	uint32_t u32;
+	float f;
+};
+
+union MP_PACKED mp_double_cast {
+	uint64_t u64;
+	double d;
+};
+
+MP_PROTO float
+mp_load_float(const char **data);
 MP_PROTO double
-mp_bswap_double(double d);
+mp_load_double(const char **data);
+MP_PROTO char *
+mp_store_float(char *data, float val);
+MP_PROTO char *
+mp_store_double(char *data, double val);
 
 MP_IMPL float
-mp_bswap_float(float f)
+mp_load_float(const char **data)
 {
-	union {
-		float f;
-		uint32_t n;
-	} cast;
-	cast.f = f;
-	cast.n = mp_bswap_u32(cast.n);
+	union mp_float_cast cast = *(union mp_float_cast *) *data;
+	*data += sizeof(cast);
+	cast.u32 = mp_bswap_u32(cast.u32);
 	return cast.f;
 }
 
 MP_IMPL double
-mp_bswap_double(double d)
+mp_load_double(const char **data)
 {
-	union {
-		double d;
-		uint64_t n;
-	} cast;
-	cast.d = d;
-	cast.n = mp_bswap_u64(cast.n);
+	union mp_double_cast cast = *(union mp_double_cast *) *data;
+	*data += sizeof(cast);
+	cast.u64 = mp_bswap_u64(cast.u64);
 	return cast.d;
 }
+
+MP_IMPL char *
+mp_store_float(char *data, float val)
+{
+	union mp_float_cast cast;
+	cast.f = val;
+	cast.u32 = mp_bswap_u32(cast.u32);
+	*(union mp_float_cast *) (data) = cast;
+	return data + sizeof(cast);
+}
+
+MP_IMPL char *
+mp_store_double(char *data, double val)
+{
+	union mp_double_cast cast;
+	cast.d = val;
+	cast.u64 = mp_bswap_u64(cast.u64);
+	*(union mp_double_cast *) (data) = cast;
+	return data + sizeof(cast);
+}
+
 #elif __FLOAT_WORD_ORDER__ == __ORDER_BIG_ENDIAN__
-#define mp_bswap_float(x) (x)
-#define mp_bswap_double(x) (x)
+
+MP_LOAD_STORE(float, float, mp_identity);
+MP_LOAD_STORE(double, double, mp_identity);
+
 #else
 #error Unsupported __FLOAT_WORD_ORDER__
 #endif
+
+#undef mp_identity
+#undef MP_LOAD_STORE
 
 /** \endcond */
 
@@ -764,8 +841,10 @@ mp_encode_bin(char *data, const char *str, uint32_t len);
  * %b - bool
  * %s - zero-end string
  * %.*s - string with specified length
+ * %p - MsgPack data
+ * %.*p - MsgPack data with specified length
  * %% is ignored
- * %<smth else> assert and undefined behaviour
+ * %smthelse assert and undefined behaviour
  * NIL - a nil value
  * all other symbols are ignored.
  *
@@ -783,10 +862,39 @@ mp_format(char *data, size_t data_size, const char *format, ...);
  *  va_start(args, fmt);
  *  mp_vformat(data, data_size, fmt, args);
  *  va_end(args);
- * \sa \link mp_format()
+ * \sa \link mp_format() mp_format() \endlink
  */
 MP_PROTO size_t
 mp_vformat(char *data, size_t data_size, const char *format, va_list args);
+
+/**
+ * \brief print MsgPack data \a file using JSON-like format.
+ * MP_EXT is printed as "undefined"
+ * \param file - pointer to file (or NULL for stdout)
+ * \param data - pointer to buffer containing msgpack object
+ * \retval >=0 - the number of bytes printed
+ * \retval -1 - error
+ * \sa fprintf()
+ */
+MP_PROTO int
+mp_fprint(FILE *file, const char *data);
+
+/**
+ * \brief format MsgPack data to \a buf using JSON-like format.
+ * \sa mp_fprint()
+ * \param buf - buffer to use
+ * \param size - buffer size. This function write at most size bytes
+ * (including the terminating null byte ('\0').
+ * \param data - pointer to buffer containing msgpack object
+ * \retval <size - the number of characters printed (excluding the null byte)
+ * \retval >=size - the number of characters (excluding the null byte),
+ *                  which would have been written to the final string if
+ *                  enough space had been available.
+ * \retval -1 - error
+ * \sa snprintf()
+ */
+MP_PROTO int
+mp_snprint(char *buf, int size, const char *data);
 
 /**
  * \brief Check that \a cur buffer has enough bytes to decode a string header
@@ -853,6 +961,27 @@ mp_decode_binl(const char **data);
  */
 MP_PROTO const char *
 mp_decode_bin(const char **data, uint32_t *len);
+
+/**
+ * \brief Decode a length of a string or binstring from MsgPack \a data
+ * \param data - the pointer to a buffer
+ * \return a length of a string
+ * \post *data = *data + mp_sizeof_strbinl(retval)
+ * \sa mp_encode_binl
+ */
+MP_PROTO uint32_t
+mp_decode_strbinl(const char **data);
+
+/**
+ * \brief Decode a string or binstring from MsgPack \a data
+ * \param data - the pointer to a buffer
+ * \param len - the pointer to save a binstring length
+ * \return a pointer to a decoded binstring
+ * \post *data = *data + mp_sizeof_strbinl(*len)
+ * \sa mp_encode_binl
+ */
+MP_PROTO const char *
+mp_decode_strbin(const char **data, uint32_t *len);
 
 /**
  * \brief Calculate exact buffer size needed to store the nil value.
@@ -1018,14 +1147,15 @@ mp_check(const char **data, const char *end);
  * {{{ Implementation
  */
 
-/** \cond 0 */
+/** \cond false */
 extern const enum mp_type mp_type_hint[];
 extern const int8_t mp_parser_hint[];
+extern const char *mp_char2escape[];
 
 MP_IMPL MP_ALWAYSINLINE enum mp_type
 mp_typeof(const char c)
 {
-	return mp_type_hint[(unsigned char) c];
+	return mp_type_hint[(uint8_t) c];
 }
 
 MP_IMPL uint32_t
@@ -1044,16 +1174,14 @@ MP_IMPL char *
 mp_encode_array(char *data, uint32_t size)
 {
 	if (size <= 15) {
-		*(unsigned char *) (data++) = 0x90 | size;
-		return data;
+		return mp_store_u8(data, 0x90 | size);
 	} else if (size <= UINT16_MAX) {
-		*(data++) = 0xdc;
-		*(uint16_t *) data = mp_bswap_u16(size);
-		return data + sizeof(uint16_t);
+		data = mp_store_u8(data, 0xdc);
+		data = mp_store_u16(data, size);
+		return data;
 	} else {
-		*(data++) = 0xdd;
-		*(uint32_t *) data = mp_bswap_u32(size);
-		return data + sizeof(uint32_t);
+		data = mp_store_u8(data, 0xdd);
+		return mp_store_u32(data, size);
 	}
 }
 
@@ -1062,30 +1190,28 @@ mp_check_array(const char *cur, const char *end)
 {
 	assert(cur < end);
 	assert(mp_typeof(*cur) == MP_ARRAY);
-	unsigned char c = *(unsigned char *) cur;
+	uint8_t c = mp_load_u8(&cur);
 	if (mp_likely(!(c & 0x40)))
-		return 1 - (end - cur);
+		return cur - end;
 
 	assert(c >= 0xdc && c <= 0xdd); /* must be checked above by mp_typeof */
 	uint32_t hsize = 2U << (c & 0x1); /* 0xdc->2, 0xdd->4 */
-	return 1 + hsize - (end - cur);
+	return hsize - (end - cur);
 }
 
 MP_PROTO uint32_t
-mp_decode_array_slowpath(unsigned char c, const char **data);
+mp_decode_array_slowpath(uint8_t c, const char **data);
 
 MP_IMPL uint32_t
-mp_decode_array_slowpath(unsigned char c, const char **data)
+mp_decode_array_slowpath(uint8_t c, const char **data)
 {
 	uint32_t size;
 	switch (c & 0x1) {
 	case 0xdc & 0x1:
-		size = mp_bswap_u16(*(uint16_t *) *data);
-		*data += sizeof(uint16_t);
+		size = mp_load_u16(data);
 		return size;
 	case 0xdd & 0x1:
-		size = mp_bswap_u32(*(uint32_t *) *data);
-		*data += sizeof(uint32_t);
+		size = mp_load_u32(data);
 		return size;
 	default:
 		mp_unreachable();
@@ -1095,8 +1221,7 @@ mp_decode_array_slowpath(unsigned char c, const char **data)
 MP_IMPL MP_ALWAYSINLINE uint32_t
 mp_decode_array(const char **data)
 {
-	unsigned char c = (unsigned char) **data;
-	*data += 1;
+	uint8_t c = mp_load_u8(data);
 
 	if (mp_likely(!(c & 0x40)))
 		return (c & 0xf);
@@ -1120,16 +1245,15 @@ MP_IMPL char *
 mp_encode_map(char *data, uint32_t size)
 {
 	if (size <= 15) {
-		*(data++) = 0x80 | (char) size;
-		return data;
+		return mp_store_u8(data, 0x80 | size);
 	} else if (size <= UINT16_MAX) {
-		*(data++) = 0xde;
-		*(uint16_t *) data = mp_bswap_u16(size);
-		return data + sizeof(uint16_t);
+		data = mp_store_u8(data, 0xde);
+		data = mp_store_u16(data, size);
+		return data;
 	} else {
-		*(data++) = 0xdf;
-		*(uint32_t *) data = mp_bswap_u32(size);
-		return data + sizeof(uint32_t);
+		data = mp_store_u8(data, 0xdf);
+		data = mp_store_u32(data, size);
+		return data;
 	}
 }
 
@@ -1138,34 +1262,28 @@ mp_check_map(const char *cur, const char *end)
 {
 	assert(cur < end);
 	assert(mp_typeof(*cur) == MP_MAP);
-	unsigned char c = *(unsigned char *) cur;
+	uint8_t c = mp_load_u8(&cur);
 	if (mp_likely((c & ~0xfU) == 0x80))
-		return 1 - (end - cur);
+		return cur - end;
 
 	assert(c >= 0xde && c <= 0xdf); /* must be checked above by mp_typeof */
 	uint32_t hsize = 2U << (c & 0x1); /* 0xde->2, 0xdf->4 */
-	return 1 + hsize - (end - cur);
+	return hsize - (end - cur);
 }
 
 MP_IMPL uint32_t
 mp_decode_map(const char **data)
 {
-	unsigned char c = (unsigned char) **data;
-	*data += 1;
-	uint32_t size;
+	uint8_t c = mp_load_u8(data);
 	switch (c) {
-	case 0x80 ... 0x8f:
-		return c & 0xf;
 	case 0xde:
-		size = mp_bswap_u16(*(uint16_t *) *data);
-		*data += sizeof(uint16_t);
-		return size;
+		return mp_load_u16(data);
 	case 0xdf:
-		size = mp_bswap_u32(*(uint32_t *) *data);
-		*data += sizeof(uint32_t);
-		return size;
+		return mp_load_u32(data);
 	default:
-		mp_unreachable();
+		if (mp_unlikely(c < 0x80 || c > 0x8f))
+			mp_unreachable();
+		return c & 0xf;
 	}
 }
 
@@ -1207,7 +1325,8 @@ mp_check_uint(const char *cur, const char *end)
 {
 	assert(cur < end);
 	assert(mp_typeof(*cur) == MP_UINT);
-	return 1 + mp_parser_hint[*(unsigned char *) cur] - (end - cur);
+	uint8_t c = mp_load_u8(&cur);
+	return mp_parser_hint[c] - (end - cur);
 }
 
 MP_IMPL ptrdiff_t
@@ -1215,35 +1334,27 @@ mp_check_int(const char *cur, const char *end)
 {
 	assert(cur < end);
 	assert(mp_typeof(*cur) == MP_INT);
-	return 1 + mp_parser_hint[*(unsigned char *) cur] - (end - cur);
+	uint8_t c = mp_load_u8(&cur);
+	return mp_parser_hint[c] - (end - cur);
 }
 
 MP_IMPL char *
 mp_encode_uint(char *data, uint64_t num)
 {
 	if (num <= 0x7f) {
-		*data = num;
-		return data + 1;
+		return mp_store_u8(data, num);
 	} else if (num <= UINT8_MAX) {
-		*data = 0xcc;
-		data++;
-		*(uint8_t *) data = num;
-		return data + sizeof(uint8_t);
+		data = mp_store_u8(data, 0xcc);
+		return mp_store_u8(data, num);
 	} else if (num <= UINT16_MAX) {
-		*data = 0xcd;
-		data++;
-		*(uint16_t *) data = mp_bswap_u16(num);
-		return data + sizeof(uint16_t);
+		data = mp_store_u8(data, 0xcd);
+		return mp_store_u16(data, num);
 	} else if (num <= UINT32_MAX) {
-		*data = 0xce;
-		data++;
-		*(uint32_t *) data = mp_bswap_u32(num);
-		return data + sizeof(uint32_t);
+		data = mp_store_u8(data, 0xce);
+		return mp_store_u32(data, num);
 	} else {
-		*data = 0xcf;
-		data++;
-		*(uint64_t *) data = mp_bswap_u64(num);
-		return data + sizeof(uint64_t);
+		data = mp_store_u8(data, 0xcf);
+		return mp_store_u64(data, num);
 	}
 }
 
@@ -1252,67 +1363,47 @@ mp_encode_int(char *data, int64_t num)
 {
 	assert(num < 0);
 	if (num >= -0x20) {
-		*data = (0xe0 | num);
-		return data + 1;
+		return mp_store_u8(data, 0xe0 | num);
 	} else if (num >= INT8_MIN) {
-		*data = 0xd0;
-		data++;
-		*(int8_t *) data = num;
-		return data + sizeof(int8_t);
+		data = mp_store_u8(data, 0xd0);
+		return mp_store_u8(data, num);
 	} else if (num >= INT16_MIN) {
-		*data = 0xd1;
-		data++;
-		*(int16_t *) data = mp_bswap_u16(num);
-		return data + sizeof(int16_t);
+		data = mp_store_u8(data, 0xd1);
+		return mp_store_u16(data, num);
 	} else if (num >= INT32_MIN) {
-		*data = 0xd2;
-		data++;
-		*(int32_t *) data = mp_bswap_u32(num);
-		return data + sizeof(int32_t);
+		data = mp_store_u8(data, 0xd2);
+		return mp_store_u32(data, num);
 	} else {
-		*data = 0xd3;
-		data++;
-		*(int64_t *) data = mp_bswap_u64(num);
-		return data + sizeof(int64_t);
+		data = mp_store_u8(data, 0xd3);
+		return mp_store_u64(data, num);
 	}
 }
 
 MP_IMPL uint64_t
 mp_decode_uint(const char **data)
 {
-	unsigned char c = (unsigned char) **data;
-	*data += 1;
-	uint64_t val;
-
+	uint8_t c = mp_load_u8(data);
 	switch (c) {
-	case 0x00 ... 0x7f:
-		return c;
 	case 0xcc:
-		val = *(uint8_t *) *data;
-		*data += sizeof(uint8_t);
-		return val;
+		return mp_load_u8(data);
 	case 0xcd:
-		val = mp_bswap_u16(*(uint16_t *) *data);
-		*data += sizeof(uint16_t);
-		return val;
+		return mp_load_u16(data);
 	case 0xce:
-		val = mp_bswap_u32(*(uint32_t *) *data);
-		*data += sizeof(uint32_t);
-		return val;
+		return mp_load_u32(data);
 	case 0xcf:
-		val = mp_bswap_u64(*(uint64_t *) *data);
-		*data += sizeof(uint64_t);
-		return val;
+		return mp_load_u64(data);
 	default:
-		mp_unreachable();
+		if (mp_unlikely(c > 0x7f))
+			mp_unreachable();
+		return c;
 	}
 }
 
 MP_IMPL int
 mp_compare_uint(const char *data_a, const char *data_b)
 {
-	unsigned char ca = (unsigned char) *data_a;
-	unsigned char cb = (unsigned char) *data_b;
+	uint8_t ca = mp_load_u8(&data_a);
+	uint8_t cb = mp_load_u8(&data_b);
 
 	int r = ca - cb;
 	if (r != 0)
@@ -1321,25 +1412,23 @@ mp_compare_uint(const char *data_a, const char *data_b)
 	if (ca <= 0x7f)
 		return 0;
 
-	++data_a;
-	++data_b;
 	uint64_t a, b;
 	switch (ca & 0x3) {
 	case 0xcc & 0x3:
-		a = *(uint8_t *) data_a;
-		b = *(uint8_t *) data_b;
+		a = mp_load_u8(&data_a);
+		b = mp_load_u8(&data_b);
 		break;
 	case 0xcd & 0x3:
-		a = mp_bswap_u16(*(uint16_t *) data_a);
-		b = mp_bswap_u16(*(uint16_t *) data_b);
+		a = mp_load_u16(&data_a);
+		b = mp_load_u16(&data_b);
 		break;
 	case 0xce & 0x3:
-		a = mp_bswap_u32(*(uint32_t *) data_a);
-		b = mp_bswap_u32(*(uint32_t *) data_b);
+		a = mp_load_u32(&data_a);
+		b = mp_load_u32(&data_b);
 		break;
 	case 0xcf & 0x3:
-		a = mp_bswap_u64(*(uint64_t *) data_a);
-		b = mp_bswap_u64(*(uint64_t *) data_b);
+		a = mp_load_u64(&data_a);
+		b = mp_load_u64(&data_b);
 		return a < b ? -1 : a > b;
 		break;
 	default:
@@ -1353,30 +1442,20 @@ mp_compare_uint(const char *data_a, const char *data_b)
 MP_IMPL int64_t
 mp_decode_int(const char **data)
 {
-	unsigned char c = (unsigned char) **data;
-	*data += 1;
-	int64_t val;
+	uint8_t c = mp_load_u8(data);
 	switch (c) {
-	case 0xe0 ... 0xff:
-		return (int8_t) (c);
 	case 0xd0:
-		val = *(int8_t *) *data;
-		*data += sizeof(uint8_t);
-		return (int8_t) val;
+		return (int8_t) mp_load_u8(data);
 	case 0xd1:
-		val = mp_bswap_u16(*(int16_t *) *data);
-		*data += sizeof(uint16_t);
-		return (int16_t) val;
+		return (int16_t) mp_load_u16(data);
 	case 0xd2:
-		val = mp_bswap_u32(*(int32_t *) *data);
-		*data += sizeof(uint32_t);
-		return (int32_t) val;
+		return (int32_t) mp_load_u32(data);
 	case 0xd3:
-		val = mp_bswap_u64(*(int64_t *) *data);
-		*data += sizeof(int64_t);
-		return val;
+		return (int64_t) mp_load_u64(data);
 	default:
-		mp_unreachable();
+		if (mp_unlikely(c < 0xe0))
+			mp_unreachable();
+		return (int8_t) (c);
 	}
 }
 
@@ -1413,43 +1492,33 @@ mp_check_double(const char *cur, const char *end)
 MP_IMPL char *
 mp_encode_float(char *data, float num)
 {
-	*data = 0xca;
-	data++;
-	*(float *) data = mp_bswap_float(num);
-	return data + sizeof(float);
+	data = mp_store_u8(data, 0xca);
+	return mp_store_float(data, num);
 }
 
 MP_IMPL char *
 mp_encode_double(char *data, double num)
 {
-	*data = 0xcb;
-	data++;
-	*(double *) data = mp_bswap_double(num);
-	return data + sizeof(double);
+	data = mp_store_u8(data, 0xcb);
+	return mp_store_double(data, num);
 }
 
 MP_IMPL float
 mp_decode_float(const char **data)
 {
-	unsigned char c = (unsigned char) **data;
+	uint8_t c = mp_load_u8(data);
 	assert(c == 0xca);
 	(void) c;
-	*data += 1;
-	float val = mp_bswap_float(*(float *) *data);
-	*data += sizeof(float);
-	return val;
+	return mp_load_float(data);
 }
 
 MP_IMPL double
 mp_decode_double(const char **data)
 {
-	unsigned char c = (unsigned char) **data;
+	uint8_t c = mp_load_u8(data);
 	assert(c == 0xcb);
 	(void) c;
-	*data += 1;
-	double val = mp_bswap_double(*(double *) *data);
-	*data += sizeof(double);
-	return val;
+	return mp_load_double(data);
 }
 
 MP_IMPL uint32_t
@@ -1494,26 +1563,17 @@ MP_IMPL char *
 mp_encode_strl(char *data, uint32_t len)
 {
 	if (len <= 31) {
-		*data = 0xa0 | (unsigned char) len;
-		data += 1;
+		return mp_store_u8(data, 0xa0 | (uint8_t) len);
 	} else if (len <= UINT8_MAX) {
-		*data = 0xd9;
-		data += 1;
-		*(uint8_t *) data = len;
-		data += sizeof(uint8_t);
+		data = mp_store_u8(data, 0xd9);
+		return mp_store_u8(data, len);
 	} else if (len <= UINT16_MAX) {
-		*data = 0xda;
-		data += 1;
-		*(uint16_t *) data = mp_bswap_u16(len);
-		data += sizeof(uint16_t);
+		data = mp_store_u8(data, 0xda);
+		return mp_store_u16(data, len);
 	} else {
-		*data = 0xdb;
-		data += 1;
-		*(uint32_t *) data = mp_bswap_u32(len);
-		data += sizeof(uint32_t);
+		data = mp_store_u8(data, 0xdb);
+		return mp_store_u32(data, len);
 	}
-
-	return data;
 }
 
 MP_IMPL char *
@@ -1528,23 +1588,15 @@ MP_IMPL char *
 mp_encode_binl(char *data, uint32_t len)
 {
 	if (len <= UINT8_MAX) {
-		*data = 0xc4;
-		data += 1;
-		*(uint8_t *) data = len;
-		data += sizeof(uint8_t);
+		data = mp_store_u8(data, 0xc4);
+		return mp_store_u8(data, len);
 	} else if (len <= UINT16_MAX) {
-		*data = 0xc5;
-		data += 1;
-		*(uint16_t *) data = mp_bswap_u16(len);
-		data += sizeof(uint16_t);
+		data = mp_store_u8(data, 0xc5);
+		return mp_store_u16(data, len);
 	} else {
-		*data = 0xc6;
-		data += 1;
-		*(uint32_t *) data = mp_bswap_u32(len);
-		data += sizeof(uint32_t);
+		data = mp_store_u8(data, 0xc6);
+		return mp_store_u32(data, len);
 	}
-
-	return data;
 }
 
 MP_IMPL char *
@@ -1561,52 +1613,42 @@ mp_check_strl(const char *cur, const char *end)
 	assert(cur < end);
 	assert(mp_typeof(*cur) == MP_STR);
 
-	unsigned char c = *(unsigned char *) cur;
+	uint8_t c = mp_load_u8(&cur);
 	if (mp_likely(c & ~0x1f) == 0xa0)
-		return 1 - (end - cur);
+		return cur - end;
 
 	assert(c >= 0xd9 && c <= 0xdb); /* must be checked above by mp_typeof */
 	uint32_t hsize = 1U << (c & 0x3) >> 1; /* 0xd9->1, 0xda->2, 0xdb->4 */
-	return 1 + hsize - (end - cur);
+	return hsize - (end - cur);
 }
 
 MP_IMPL ptrdiff_t
 mp_check_binl(const char *cur, const char *end)
 {
-	unsigned char c = *(unsigned char *) cur;
+	uint8_t c = mp_load_u8(&cur);
 	assert(cur < end);
 	assert(mp_typeof(c) == MP_BIN);
 
 	assert(c >= 0xc4 && c <= 0xc6); /* must be checked above by mp_typeof */
 	uint32_t hsize = 1U << (c & 0x3); /* 0xc4->1, 0xc5->2, 0xc6->4 */
-	return 1 + hsize - (end - cur);
+	return hsize - (end - cur);
 }
 
 MP_IMPL uint32_t
 mp_decode_strl(const char **data)
 {
-	unsigned char c = (unsigned char) **data;
-	*data += 1;
-
-	uint32_t len;
+	uint8_t c = mp_load_u8(data);
 	switch (c) {
-	case 0xa0 ... 0xbf:
-		len = c & 0x1f;
-		return len;
 	case 0xd9:
-		len = *(uint8_t *) *data;
-		*data += sizeof(uint8_t);
-		return len;
+		return mp_load_u8(data);
 	case 0xda:
-		len = mp_bswap_u16(*(uint16_t *) *data);
-		*data += sizeof(uint16_t);
-		return len;
+		return mp_load_u16(data);
 	case 0xdb:
-		len = mp_bswap_u32(*(uint32_t *) *data);
-		*data += sizeof(uint32_t);
-		return len;
+		return mp_load_u32(data);
 	default:
-		mp_unreachable();
+		if (mp_unlikely(c < 0xa0 || c > 0xbf))
+			mp_unreachable();
+		return c & 0x1f;
 	}
 }
 
@@ -1624,23 +1666,15 @@ mp_decode_str(const char **data, uint32_t *len)
 MP_IMPL uint32_t
 mp_decode_binl(const char **data)
 {
-	unsigned char c = (unsigned char) **data;
-	*data += 1;
-	uint32_t len;
+	uint8_t c = mp_load_u8(data);
 
 	switch (c) {
 	case 0xc4:
-		len = *(uint8_t *) *data;
-		*data += sizeof(uint8_t);
-		return len;
+		return mp_load_u8(data);
 	case 0xc5:
-		len = mp_bswap_u16(*(uint16_t *) *data);
-		*data += sizeof(uint16_t);
-		return len;
+		return mp_load_u16(data);
 	case 0xc6:
-		len = mp_bswap_u32(*(uint32_t *) *data);
-		*data += sizeof(uint32_t);
-		return len;
+		return mp_load_u32(data);
 	default:
 		mp_unreachable();
 	}
@@ -1658,6 +1692,42 @@ mp_decode_bin(const char **data, uint32_t *len)
 }
 
 MP_IMPL uint32_t
+mp_decode_strbinl(const char **data)
+{
+	uint8_t c = mp_load_u8(data);
+
+	switch (c) {
+	case 0xd9:
+		return mp_load_u8(data);
+	case 0xda:
+		return mp_load_u16(data);
+	case 0xdb:
+		return mp_load_u32(data);
+	case 0xc4:
+		return mp_load_u8(data);
+	case 0xc5:
+		return mp_load_u16(data);
+	case 0xc6:
+		return mp_load_u32(data);
+	default:
+		if (mp_unlikely(c < 0xa0 || c > 0xbf))
+			mp_unreachable();
+		return c & 0x1f;
+	}
+}
+
+MP_IMPL const char *
+mp_decode_strbin(const char **data, uint32_t *len)
+{
+	assert(len != NULL);
+
+	*len = mp_decode_strbinl(data);
+	const char *str = *data;
+	*data += *len;
+	return str;
+}
+
+MP_IMPL uint32_t
 mp_sizeof_nil()
 {
 	return 1;
@@ -1666,8 +1736,7 @@ mp_sizeof_nil()
 MP_IMPL char *
 mp_encode_nil(char *data)
 {
-	*data = 0xc0;
-	return data + 1;
+	return mp_store_u8(data, 0xc0);
 }
 
 MP_IMPL ptrdiff_t
@@ -1681,10 +1750,9 @@ mp_check_nil(const char *cur, const char *end)
 MP_IMPL void
 mp_decode_nil(const char **data)
 {
-	unsigned char c = (unsigned char) **data;
+	uint8_t c = mp_load_u8(data);
 	assert(c == 0xc0);
 	(void) c;
-	*data += 1;
 }
 
 MP_IMPL uint32_t
@@ -1697,8 +1765,7 @@ mp_sizeof_bool(bool val)
 MP_IMPL char *
 mp_encode_bool(char *data, bool val)
 {
-	*data = 0xc2 | (val & 1);
-	return data + 1;
+	return mp_store_u8(data, 0xc2 | (val & 1));
 }
 
 MP_IMPL ptrdiff_t
@@ -1712,8 +1779,7 @@ mp_check_bool(const char *cur, const char *end)
 MP_IMPL bool
 mp_decode_bool(const char **data)
 {
-	unsigned char c = (unsigned char) **data;
-	*data += 1;
+	uint8_t c = mp_load_u8(data);
 	switch (c) {
 	case 0xc3:
 		return true;
@@ -1746,66 +1812,66 @@ MP_IMPL void
 mp_next_slowpath(const char **data, int k)
 {
 	for (; k > 0; k--) {
-		unsigned char c = (unsigned char) **data;
+		uint8_t c = mp_load_u8(data);
 		int l = mp_parser_hint[c];
 		if (mp_likely(l >= 0)) {
-			*data += l + 1;
+			*data += l;
 			continue;
 		} else if (mp_likely(l > MP_HINT)) {
 			k -= l;
-			*data += 1;
 			continue;
 		}
 
-		*data += 1;
+		uint32_t len;
 		switch (l) {
 		case MP_HINT_STR_8:
 			/* MP_STR (8) */
-			*data += *(uint8_t *) *data + sizeof(uint8_t);
+			len = mp_load_u8(data);
+			*data += len;
 			break;
 		case MP_HINT_STR_16:
 			/* MP_STR (16) */
-			*data += mp_bswap_u16(*(uint16_t *) *data) +
-					sizeof(uint16_t);
+			len = mp_load_u16(data);
+			*data += len;
 			break;
 		case MP_HINT_STR_32:
 			/* MP_STR (32) */
-			*data += mp_bswap_u32(*(uint32_t *) *data) +
-					sizeof(uint32_t);
+			len = mp_load_u32(data);
+			*data += len;
 			break;
 		case MP_HINT_ARRAY_16:
 			/* MP_ARRAY (16) */
-			k += mp_bswap_u16(*(uint16_t *) *data);
-			*data += sizeof(uint16_t);
+			k += mp_load_u16(data);
 			break;
 		case MP_HINT_ARRAY_32:
 			/* MP_ARRAY (32) */
-			k += mp_bswap_u32(*(uint32_t *) *data);
-			*data += sizeof(uint32_t);
+			k += mp_load_u32(data);
 			break;
 		case MP_HINT_MAP_16:
 			/* MP_MAP (16) */
-			k += 2 * mp_bswap_u16(*(uint16_t *) *data);
-			*data += sizeof(uint16_t);
+			k += 2 * mp_load_u16(data);
 			break;
 		case MP_HINT_MAP_32:
 			/* MP_MAP (32) */
-			k += 2 * mp_bswap_u32(*(uint32_t *) *data);
-			*data += sizeof(uint32_t);
+			k += 2 * mp_load_u32(data);
 			break;
 		case MP_HINT_EXT_8:
 			/* MP_EXT (8) */
-			*data += *(uint8_t *) *data + sizeof(uint8_t) + 1;
+			len = mp_load_u8(data);
+			mp_load_u8(data);
+			*data += len;
 			break;
 		case MP_HINT_EXT_16:
 			/* MP_EXT (16) */
-			*data += mp_bswap_u16(*(uint16_t *) *data) +
-					sizeof(uint16_t) + 1;
+			len = mp_load_u16(data);
+			mp_load_u8(data);
+			*data += len;
 			break;
 		case MP_HINT_EXT_32:
 			/* MP_EXT (32) */
-			*data += mp_bswap_u32(*(uint32_t *) *data) +
-					sizeof(uint32_t) + 1;
+			len = mp_load_u32(data);
+			mp_load_u8(data);
+			*data += len;
 			break;
 		default:
 			mp_unreachable();
@@ -1818,21 +1884,21 @@ mp_next(const char **data)
 {
 	int k = 1;
 	for (; k > 0; k--) {
-		unsigned char c = (unsigned char) **data;
+		uint8_t c = mp_load_u8(data);
 		int l = mp_parser_hint[c];
 		if (mp_likely(l >= 0)) {
-			*data += l + 1;
+			*data += l;
 			continue;
 		} else if (mp_likely(c == 0xd9)){
 			/* MP_STR (8) */
-			*data += 1;
-			*data += *(uint8_t *) *data + sizeof(uint8_t);
+			uint8_t len = mp_load_u8(data);
+			*data += len;
 			continue;
 		} else if (l > MP_HINT) {
 			k -= l;
-			*data += 1;
 			continue;
 		} else {
+			*data -= sizeof(uint8_t);
 			return mp_next_slowpath(data, k);
 		}
 	}
@@ -1846,8 +1912,7 @@ mp_check(const char **data, const char *end)
 		if (mp_unlikely(*data >= end))
 			return 1;
 
-		unsigned char c = (unsigned char) **data;
-		*data += 1;
+		uint8_t c = mp_load_u8(data);
 		int l = mp_parser_hint[c];
 		if (mp_likely(l >= 0)) {
 			*data += l;
@@ -1857,74 +1922,76 @@ mp_check(const char **data, const char *end)
 			continue;
 		}
 
+		uint32_t len;
 		switch (l) {
 		case MP_HINT_STR_8:
 			/* MP_STR (8) */
 			if (mp_unlikely(*data + sizeof(uint8_t) > end))
 				return 1;
-			*data += *(uint8_t *) *data + sizeof(uint8_t);
+			len = mp_load_u8(data);
+			*data += len;
 			break;
 		case MP_HINT_STR_16:
 			/* MP_STR (16) */
 			if (mp_unlikely(*data + sizeof(uint16_t) > end))
 				return 1;
-			*data += mp_bswap_u16(*(uint16_t *) *data) +
-					sizeof(uint16_t);
+			len = mp_load_u16(data);
+			*data += len;
 			break;
 		case MP_HINT_STR_32:
 			/* MP_STR (32) */
 			if (mp_unlikely(*data + sizeof(uint32_t) > end))
 				return 1;
-			*data += mp_bswap_u32(*(uint32_t *) *data) +
-					sizeof(uint32_t);
+			len = mp_load_u32(data);
+			*data += len;
 			break;
 		case MP_HINT_ARRAY_16:
 			/* MP_ARRAY (16) */
 			if (mp_unlikely(*data + sizeof(uint16_t) > end))
 				return 1;
-			k += mp_bswap_u16(*(uint16_t *) *data);
-			*data += sizeof(uint16_t);
+			k += mp_load_u16(data);
 			break;
 		case MP_HINT_ARRAY_32:
 			/* MP_ARRAY (32) */
 			if (mp_unlikely(*data + sizeof(uint32_t) > end))
 				return 1;
-			k += mp_bswap_u32(*(uint32_t *) *data);
-			*data += sizeof(uint32_t);
+			k += mp_load_u32(data);
 			break;
 		case MP_HINT_MAP_16:
 			/* MP_MAP (16) */
 			if (mp_unlikely(*data + sizeof(uint16_t) > end))
-				return false;
-			k += 2 * mp_bswap_u16(*(uint16_t *) *data);
-			*data += sizeof(uint16_t);
+				return 1;
+			k += 2 * mp_load_u16(data);
 			break;
 		case MP_HINT_MAP_32:
 			/* MP_MAP (32) */
 			if (mp_unlikely(*data + sizeof(uint32_t) > end))
 				return 1;
-			k += 2 * mp_bswap_u32(*(uint32_t *) *data);
-			*data += sizeof(uint32_t);
+			k += 2 * mp_load_u32(data);
 			break;
 		case MP_HINT_EXT_8:
 			/* MP_EXT (8) */
 			if (mp_unlikely(*data + sizeof(uint8_t) + 1 > end))
 				return 1;
-			*data += *(uint8_t *) *data + sizeof(uint8_t) + 1;
+			len = mp_load_u8(data);
+			mp_load_u8(data);
+			*data += len;
 			break;
 		case MP_HINT_EXT_16:
 			/* MP_EXT (16) */
 			if (mp_unlikely(*data + sizeof(uint16_t) + 1 > end))
 				return 1;
-			*data += mp_bswap_u16(*(uint16_t *) *data) +
-					sizeof(uint16_t) + 1;
+			len = mp_load_u16(data);
+			mp_load_u8(data);
+			*data += len;
 			break;
 		case MP_HINT_EXT_32:
 			/* MP_EXT (32) */
 			if (mp_unlikely(*data + sizeof(uint32_t) + 1 > end))
 				return 1;
-			*data += mp_bswap_u32(*(uint32_t *) *data) +
-					sizeof(uint32_t) + 1;
+		        len = mp_load_u32(data);
+			mp_load_u8(data);
+			*data += len;
 			break;
 		default:
 			mp_unreachable();
@@ -1941,12 +2008,15 @@ MP_IMPL size_t
 mp_vformat(char *data, size_t data_size, const char *format, va_list vl)
 {
 	size_t result = 0;
+	const char *f = NULL;
 
-	for (const char *f = format; *f; f++) {
+	for (f = format; *f; f++) {
 		if (f[0] == '[') {
 			uint32_t size = 0;
 			int level = 1;
-			for (const char *e = f + 1; level && *e; e++) {
+			const char *e = NULL;
+
+			for (e = f + 1; level && *e; e++) {
 				if (*e == '[' || *e == '{') {
 					if (level == 1)
 						size++;
@@ -1973,7 +2043,9 @@ mp_vformat(char *data, size_t data_size, const char *format, va_list vl)
 		} else if (f[0] == '{') {
 			uint32_t count = 0;
 			int level = 1;
-			for (const char *e = f + 1; level && *e; e++) {
+			const char *e = NULL;
+
+			for (e = f + 1; level && *e; e++) {
 				if (*e == '[' || *e == '{') {
 					if (level == 1)
 						count++;
@@ -2024,6 +2096,26 @@ mp_vformat(char *data, size_t data_size, const char *format, va_list vl)
 				result += mp_sizeof_str(len);
 				if (result <= data_size)
 					data = mp_encode_str(data, str, len);
+				f += 2;
+			} else if (f[0] == 'p') {
+				const char *p = va_arg(vl, const char *);
+				const char *end = p;
+				mp_next(&end);
+				uint32_t len = end - p;
+				result += len;
+				if (result <= data_size) {
+					memcpy(data, p, len);
+					data += len;
+				}
+			} else if (f[0] == '.' && f[1] == '*' && f[2] == 'p') {
+				uint32_t len = va_arg(vl, uint32_t);
+				const char *p = va_arg(vl, const char *);
+				assert(len > 0);
+				result += len;
+				if (result <= data_size) {
+					memcpy(data, p, len);
+					data += len;
+				}
 				f += 2;
 			} else if(f[0] == 'f') {
 				float v = (float)va_arg(vl, double);
@@ -2111,6 +2203,154 @@ mp_format(char *data, size_t data_size, const char *format, ...)
 	return res;
 }
 
+#define MP_PRINT(SELF, PRINTF) \
+{										\
+	switch (mp_typeof(**data)) {						\
+	case MP_NIL:								\
+		mp_decode_nil(data);						\
+		PRINTF("null");							\
+		break;								\
+	case MP_UINT:								\
+		PRINTF("%llu", (unsigned long long) mp_decode_uint(data));	\
+		break;								\
+	case MP_INT:								\
+		PRINTF("%lld", (long long) mp_decode_int(data));		\
+		break;								\
+	case MP_STR:								\
+	case MP_BIN:								\
+	{									\
+		uint32_t len = mp_typeof(**data) == MP_STR ?			\
+			mp_decode_strl(data) : mp_decode_binl(data);		\
+		PRINTF("\"");							\
+		const char *s;							\
+		for (s = *data; s < *data + len; s++) {				\
+			unsigned char c = (unsigned char ) *s;			\
+			if (c < 128 && mp_char2escape[c] != NULL) {		\
+				/* Escape character */				\
+				PRINTF("%s", mp_char2escape[c]);		\
+			} else {						\
+				PRINTF("%c", c);				\
+			}							\
+		}								\
+		PRINTF("\"");							\
+		*data += len;							\
+		break;								\
+	}									\
+	case MP_ARRAY:								\
+	{									\
+		uint32_t count = mp_decode_array(data);				\
+		PRINTF("[");							\
+		uint32_t i;							\
+		for (i = 0; i < count; i++) {					\
+			if (i)							\
+				PRINTF(", ");					\
+			SELF(data);						\
+		}								\
+		PRINTF("]");							\
+		break;								\
+	}									\
+	case MP_MAP:								\
+	{									\
+		uint32_t count = mp_decode_map(data);				\
+		PRINTF("{");							\
+		uint32_t i;							\
+		for (i = 0; i < count; i++) {					\
+			if (i)							\
+				PRINTF(", ");					\
+			SELF(data);						\
+			PRINTF(": ");						\
+			SELF(data);						\
+		}								\
+		PRINTF("}");							\
+		break;								\
+	}									\
+	case MP_BOOL:								\
+		PRINTF(mp_decode_bool(data) ? "true" : "false");		\
+		break;								\
+	case MP_FLOAT:								\
+		PRINTF("%g", mp_decode_float(data));				\
+		break;								\
+	case MP_DOUBLE:								\
+		PRINTF("%lg", mp_decode_double(data));				\
+		break;								\
+	case MP_EXT:								\
+		mp_next(data);							\
+		PRINTF("undefined");						\
+		break;								\
+	default:								\
+		mp_unreachable();						\
+		return -1;							\
+	}									\
+}
+
+MP_PROTO int
+mp_fprint_internal(FILE *file, const char **data);
+
+MP_IMPL int
+mp_fprint_internal(FILE *file, const char **data)
+{
+	int total_bytes = 0;
+#define HANDLE(FUN, ...) do {							\
+	int bytes = FUN(file, __VA_ARGS__);					\
+	if (mp_unlikely(bytes < 0))						\
+		return -1;							\
+	total_bytes += bytes;							\
+} while (0)
+#define PRINT(...) HANDLE(fprintf, __VA_ARGS__)
+#define SELF(...) HANDLE(mp_fprint_internal, __VA_ARGS__)
+MP_PRINT(SELF, PRINT)
+#undef HANDLE
+#undef SELF
+#undef PRINT
+	return total_bytes;
+}
+
+MP_IMPL int
+mp_fprint(FILE *file, const char *data)
+{
+	if (!file)
+		file = stdout;
+	int res = mp_fprint_internal(file, &data);
+	return res;
+}
+
+MP_PROTO int
+mp_snprint_internal(char *buf, int size, const char **data);
+
+MP_IMPL int
+mp_snprint_internal(char *buf, int size, const char **data)
+{
+	int total_bytes = 0;
+#define HANDLE(FUN, ...) do {							\
+	int bytes = FUN(buf, size, __VA_ARGS__);				\
+	if (mp_unlikely(bytes < 0))						\
+		return -1;							\
+	total_bytes += bytes;							\
+	if (bytes < size) {							\
+		buf += bytes;							\
+		size -= bytes;							\
+	} else {								\
+		/* Calculate the number of bytes needed */			\
+		buf = NULL;							\
+		size = 0;							\
+	}									\
+} while (0)
+#define PRINT(...) HANDLE(snprintf, __VA_ARGS__)
+#define SELF(...) HANDLE(mp_snprint_internal, __VA_ARGS__)
+MP_PRINT(SELF, PRINT)
+#undef HANDLE
+#undef SELF
+#undef PRINT
+	return total_bytes;
+}
+
+MP_IMPL int
+mp_snprint(char *buf, int size, const char *data)
+{
+	return mp_snprint_internal(buf, size, &data);
+}
+
+#undef MP_PRINT
 /** \endcond */
 
 /*
@@ -2121,7 +2361,7 @@ mp_format(char *data, size_t data_size, const char *format, ...)
  * {{{ Implementation: parser tables
  */
 
-/** \cond 0 */
+/** \cond false */
 
 #if defined(MP_SOURCE)
 
@@ -2741,6 +2981,29 @@ const int8_t mp_parser_hint[256] = {
 	/* 0xfe */ 0,
 	/* 0xff */ 0
 	/* }}} */
+};
+
+const char *mp_char2escape[128] = {
+	"\\u0000", "\\u0001", "\\u0002", "\\u0003",
+	"\\u0004", "\\u0005", "\\u0006", "\\u0007",
+	"\\b", "\\t", "\\n", "\\u000b",
+	"\\f", "\\r", "\\u000e", "\\u000f",
+	"\\u0010", "\\u0011", "\\u0012", "\\u0013",
+	"\\u0014", "\\u0015", "\\u0016", "\\u0017",
+	"\\u0018", "\\u0019", "\\u001a", "\\u001b",
+	"\\u001c", "\\u001d", "\\u001e", "\\u001f",
+	NULL, NULL, "\\\"", NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, "\\/",
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, "\\\\", NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, "\\u007f"
 };
 
 #endif /* defined(MP_SOURCE) */

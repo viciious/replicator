@@ -5,7 +5,7 @@ set(CMAKE_VERBOSE_MAKEFILE on)
 set(CMAKE_SKIP_INSTALL_ALL_DEPENDENCY true)
 
 set(REPLICATOR_NAME "replicatord")
-set(REPLICATOR_ROOT "${CMAKE_SOURCE_DIR}")
+set(REPLICATOR_ROOT "${PROJECT_SOURCE_DIR}")
 set(REPLICATOR_CFLAGS "-DTB_LOCAL=${REPLICATOR_ROOT}/lib/tarantool15-c/lib -std=c++0x -g")
 set(REPLICATOR_SRC
     ${REPLICATOR_ROOT}/lib/tarantool15-c/lib/session.c
@@ -15,7 +15,9 @@ set(REPLICATOR_SRC
     ${REPLICATOR_ROOT}/tpwfactory.cpp
 )
 
-add_subdirectory(lib/tarantool15-c)
+set(TARANTOOL_C_EMBEDDED true)
+
+add_subdirectory(lib/tarantool-c)
 add_subdirectory(lib/libslave)
 
 include(ExternalProject)
@@ -27,7 +29,7 @@ ExternalProject_Add(libconfig
   BUILD_IN_SOURCE 1
 )
 
-include_directories("${REPLICATOR_ROOT}" "${REPLICATOR_ROOT}/lib/libslave" "${REPLICATOR_ROOT}/lib/msgpuck" "${REPLICATOR_ROOT}/lib/tarantool15-c" "${REPLICATOR_ROOT}/lib/libconfig/include")
+include_directories("${REPLICATOR_ROOT}" "${REPLICATOR_ROOT}/lib/libslave" "${REPLICATOR_ROOT}/lib/tarantool-c/include" "${REPLICATOR_ROOT}/lib/tarantool15-c" "${REPLICATOR_ROOT}/lib/libconfig/include")
 
 find_library(LMYSQL_CLIENT_R mysqlclient_r PATH_SUFFIXES mysql)
 find_library(LPTHREAD pthread)
@@ -38,7 +40,7 @@ find_library(LBOOST_SERIALIZATION_MT boost_serialization)
 add_executable(rp ${REPLICATOR_SRC})
 set_target_properties(rp PROPERTIES COMPILE_FLAGS "${REPLICATOR_CFLAGS}")
 set_target_properties(rp PROPERTIES OUTPUT_NAME ${REPLICATOR_NAME})
-target_link_libraries(rp tb slave_a ${REPLICATOR_ROOT}/lib/libconfig/lib/.libs/libconfig++.a)
+target_link_libraries(rp slave_a ${REPLICATOR_ROOT}/lib/tarantool-c/tnt/libtarantool.a ${REPLICATOR_ROOT}/lib/libconfig/lib/.libs/libconfig++.a)
 target_link_libraries(rp ${LMYSQL_CLIENT_R} ${LPTHREAD} ${LZMQ} ${LBOOST_SYSTEM_MT} ${LBOOST_SERIALIZATION_MT})
 
 install(TARGETS rp RUNTIME DESTINATION sbin)
