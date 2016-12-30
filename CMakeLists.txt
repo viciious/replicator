@@ -6,16 +6,16 @@ set(CMAKE_SKIP_INSTALL_ALL_DEPENDENCY true)
 
 set(REPLICATOR_NAME "replicatord")
 set(REPLICATOR_ROOT "${CMAKE_SOURCE_DIR}")
-set(REPLICATOR_CFLAGS "-DTB_LOCAL=${REPLICATOR_ROOT}/lib/tarantool-c/lib -std=c++0x -g")
+set(REPLICATOR_CFLAGS "-DTB_LOCAL=${REPLICATOR_ROOT}/lib/tarantool15-c/lib -std=c++0x -g")
 set(REPLICATOR_SRC
-    ${REPLICATOR_ROOT}/lib/tarantool-c/lib/session.c
+    ${REPLICATOR_ROOT}/lib/tarantool15-c/lib/session.c
     ${REPLICATOR_ROOT}/dbreader.cpp
     ${REPLICATOR_ROOT}/main.cpp
     ${REPLICATOR_ROOT}/tpwriter15.cpp
     ${REPLICATOR_ROOT}/tpwfactory.cpp
 )
 
-add_subdirectory(lib/tarantool-c)
+add_subdirectory(lib/tarantool15-c)
 add_subdirectory(lib/libslave)
 
 include(ExternalProject)
@@ -27,7 +27,7 @@ ExternalProject_Add(libconfig
   BUILD_IN_SOURCE 1
 )
 
-include_directories("${REPLICATOR_ROOT}" "${REPLICATOR_ROOT}/lib/libslave" "${REPLICATOR_ROOT}/lib/msgpuck" "${REPLICATOR_ROOT}/lib/tarantool-c" "${REPLICATOR_ROOT}/lib/libconfig/include")
+include_directories("${REPLICATOR_ROOT}" "${REPLICATOR_ROOT}/lib/libslave" "${REPLICATOR_ROOT}/lib/msgpuck" "${REPLICATOR_ROOT}/lib/tarantool15-c" "${REPLICATOR_ROOT}/lib/libconfig/include")
 
 find_library(LMYSQL_CLIENT_R mysqlclient_r PATH_SUFFIXES mysql)
 find_library(LPTHREAD pthread)
